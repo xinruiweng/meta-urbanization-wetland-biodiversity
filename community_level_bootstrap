@@ -1,0 +1,410 @@
+library(readr)
+library(dplyr)
+library(purrr)
+# ============================================================
+# 1. 设置路径
+# ============================================================
+
+input_dir <- "points_coordinate_in_PCoA_NMDS"
+output_dir <- "bootstrap"
+
+# Bootstrap次数
+B <- 1000
+
+# 保证结果可以重复
+set.seed(1234)
+
+
+# ============================================================
+# 2. 定义函数：计算一个CSV文件的bootstrap
+# ============================================================
+
+bootstrap_one_file <- function(file_path, B = 1000) {
+  
+  df <- read_csv(file_path, col_types = cols())
+  
+  # ----------------------------------------------------------
+  # 检查数据
+  # ----------------------------------------------------------
+  
+  required_cols <- c("Group", "X", "Y")
+  
+  if (!all(required_cols %in% names(df))) {
+    stop(
+      paste(
+        "Missing required columns in:",
+        basename(file_path)
+      )
+    )
+  }
+  
+  # 删除缺失值
+  df <- df %>%
+    filter(
+      !is.na(Group),
+      !is.na(X),
+      !is.na(Y)
+    )
+  
+  # 分组
+  urban <- df %>%
+    filter(Group == "urbanization")
+  
+  control <- df %>%
+    filter(Group == "control")
+  
+  n_urban <- nrow(urban)
+  n_control <- nrow(control)
+  
+  # ----------------------------------------------------------
+  # 至少需要：
+  # urban >= 2
+  # control >= 2
+  # ----------------------------------------------------------
+  
+  if (n_urban < 2 || n_control < 2) {
+    
+    warning(
+      paste(
+        basename(file_path),
+        "has insufficient communities:",
+        "urban =", n_urban,
+        "control =", n_control
+      )
+    )
+    
+    return(NULL)
+  }
+  
+  # ----------------------------------------------------------
+  # 保存bootstrap结果
+  # ----------------------------------------------------------
+  
+  boot_homo <- numeric(B)
+  boot_shift <- numeric(B)
+  
+  
+  # ==========================================================
+  # 3. Bootstrap
+  # ==========================================================
+  
+  for (b in seq_len(B)) {
+    
+    # --------------------------------------------------------
+    # Community-level resampling
+    # --------------------------------------------------------
+    
+    urban_boot <- urban[
+      sample(
+        seq_len(n_urban),
+        size = n_urban,
+        replace = TRUE
+      ),
+      ,
+      drop = FALSE
+    ]
+    
+    control_boot <- control[
+      sample(
+        seq_len(n_control),
+        size = n_control,
+        replace = TRUE
+      ),
+      ,
+      drop = FALSE
+    ]
+    
+    
+    # ========================================================
+    # 4. Within-urban distance
+    # ========================================================
+    
+    urban_dist <- dist(
+      urban_boot[, c("X", "Y")]
+    )
+    
+    mean_urban <- mean(
+      urban_dist,
+      na.rm = TRUE
+    )
+    
+    
+    # ========================================================
+    # 5. Within-control distance
+    # ========================================================
+    
+    control_dist <- dist(
+      control_boot[, c("X", "Y")]
+    )
+    
+    mean_control <- mean(
+      control_dist,
+      na.rm = TRUE
+    )
+    
+    
+    # ========================================================
+    # 6. Between-group distance
+    # ========================================================
+    
+    coords_urban <- as.matrix(
+      urban_boot[, c("X", "Y")]
+    )
+    
+    coords_control <- as.matrix(
+      control_boot[, c("X", "Y")]
+    )
+    
+    # 计算 urban × control 之间的 Euclidean 距离
+    between_dist <- as.matrix(
+      dist(
+        rbind(
+          coords_urban,
+          coords_control
+        )
+      )
+    )
+    
+    between_dist <- between_dist[
+      seq_len(n_urban),
+      n_urban + seq_len(n_control),
+      drop = FALSE
+    ]
+    
+    mean_between <- mean(
+      between_dist,
+      na.rm = TRUE
+    )
+    
+    
+    # ========================================================
+    # 7. LRR homogeneity
+    # ========================================================
+    
+    if (
+      is.finite(mean_urban) &&
+      is.finite(mean_control) &&
+      mean_urban > 0 &&
+      mean_control > 0
+    ) {
+      
+      boot_homo[b] <- log(
+        mean_urban / mean_control
+      )
+      
+    } else {
+      
+      # 如果某次bootstrap中某一组的mean distance = 0，
+      # 则该次LRR无法计算，记为NA
+      boot_homo[b] <- NA_real_
+    }
+    
+    
+    # ========================================================
+    # 8. LRR shift
+    # ========================================================
+    
+    mean_both <- (
+      mean_urban +
+        mean_control
+    ) / 2
+    
+    if (
+      is.finite(mean_between) &&
+      is.finite(mean_both) &&
+      mean_between > 0 &&
+      mean_both > 0
+    ) {
+      
+      boot_shift[b] <- log(
+        mean_between / mean_both
+      )
+      
+    } else {
+      
+      # 如果mean distance无效，则该次LRR记为NA
+      boot_shift[b] <- NA_real_
+    }
+  }
+  
+  
+  # ==========================================================
+  # 9. Bootstrap variance
+  # ==========================================================
+  
+  result <- data.frame(
+    
+    bootstrap_iteration = seq_len(B),
+    
+    LRR_homogeneity = boot_homo,
+    
+    LRR_shift = boot_shift
+  )
+  
+  
+  return(result)
+}
+
+
+# ============================================================
+# 10. 对95个CSV逐个进行bootstrap
+# ============================================================
+
+for (i in 1:95) {
+  
+  file_name <- paste0(i, ".csv")
+  
+  file_path <- file.path(
+    input_dir,
+    file_name
+  )
+  
+  # 检查文件是否存在
+  if (!file.exists(file_path)) {
+    
+    warning(
+      paste(
+        "File not found:",
+        file_path
+      )
+    )
+    
+    next
+  }
+  
+  cat(
+    "\nProcessing:",
+    file_name,
+    "...\n"
+  )
+  
+  # Bootstrap
+  result <- bootstrap_one_file(
+    file_path = file_path,
+    B = B
+  )
+  
+  # 如果数据不足，跳过
+  if (is.null(result)) {
+    next
+  }
+  
+  # 输出文件
+  output_file <- file.path(
+    output_dir,
+    paste0(
+      "bootstrap_",
+      i,
+      ".csv"
+    )
+  )
+  
+  write_csv(
+    result,
+    output_file
+  )
+  
+  cat(
+    "Saved:",
+    output_file,
+    "\n"
+  )
+}
+
+
+cat("\n====================================\n")
+cat("Bootstrap completed!\n")
+cat("Number of iterations:", B, "\n")
+cat("Results saved in:", output_dir, "\n")
+cat("====================================\n")
+
+##check NA----
+check_boot <- map_dfr(1:95, function(i) {
+  
+  df <- read_csv(
+    paste0(
+      "bootstrap/bootstrap_",
+      i,
+      ".csv"
+    ),
+    show_col_types = FALSE
+  )
+  
+  data.frame(
+    file_id = i,
+    n_boot = nrow(df),
+    n_homo_finite = sum(is.finite(df$LRR_homogeneity)),
+    n_shift_finite = sum(is.finite(df$LRR_shift)),
+    n_homo_na = sum(!is.finite(df$LRR_homogeneity)),
+    n_shift_na = sum(!is.finite(df$LRR_shift))
+  )
+})
+
+check_boot
+
+
+# 原始 community 数量
+community_counts <- map_dfr(1:95, function(i) {
+  
+  df <- read_csv(
+    file.path(
+      "points_coordinate_in_PCoA_NMDS",
+      paste0(i, ".csv")
+    ),
+    show_col_types = FALSE
+  )
+  
+  data.frame(
+    file_id = i,
+    n_urbanization = sum(
+      df$Group == "urbanization",
+      na.rm = TRUE
+    ),
+    n_control = sum(
+      df$Group == "control",
+      na.rm = TRUE
+    )
+  )
+})
+
+
+# bootstrap summary
+boot_summary <- map_dfr(1:95, function(i) {
+  
+  file_path <- file.path(
+    "bootstrap",
+    paste0("bootstrap_", i, ".csv")
+  )
+  
+  df <- read_csv(
+    file_path,
+    show_col_types = FALSE
+  )
+  
+  homo_finite <- df$LRR_homogeneity[
+    is.finite(df$LRR_homogeneity)
+  ]
+  
+  shift_finite <- df$LRR_shift[
+    is.finite(df$LRR_shift)
+  ]
+  
+  data.frame(
+    file_id = i,
+    
+    n_finite_homo = length(homo_finite),
+    boot_mean_homo = mean(homo_finite),
+    boot_sd_homo = sd(homo_finite),
+    vi_boot_homo = var(homo_finite),
+    
+    n_finite_shift = length(shift_finite),
+    boot_mean_shift = mean(shift_finite),
+    boot_sd_shift = sd(shift_finite),
+    vi_boot_shift = var(shift_finite)
+  )
+})
+
+write_csv(
+  boot_summary,
+  "bootstrap/bootstrap_summary.csv"
+)
