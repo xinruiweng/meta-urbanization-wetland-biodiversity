@@ -209,15 +209,17 @@ write.csv(
 
 ##forest plot----
 
-df <- read.csv("data/shannon_mean_95ci.csv")
+df <- read.csv("data/shannon_mixed_model_mean_95ci.csv")
 
+str(df)
 df <- df %>%
-  mutate(label_n = paste0(lable, " (", n, ")"))
+  mutate(label_n = paste0(lable, " (",k,"," ,n, ")"))
 
-
+# squences
 bio_order <- c(
   "Bacteria",
   "Algae",
+  "Fungus",
   "Plant",
   "Zooplankton",
   "Macroinvertebrate",
@@ -228,18 +230,18 @@ bio_order <- c(
 )
 
 wetland_order <- c(
-  "River",
+  "Inland flowing water",
   "Reservoir/pond",
   "Lake",
   "Inland vegetated wetland",
   "Coastal wetland",
   "Others"
 )
-scale_order <- c("less than 10 km",
+scale_order <- c("Less than 10 km",
                  "(10, 50] km",
                  "(50, 100] km",
                  "(100, 200] km",
-                 "more than 200 km"
+                 "More than 200 km"
 )
 income_order <- c("High-income",
                   "Upper-middle-income",
@@ -263,61 +265,136 @@ df <- df |>
     )
   )
 
+##comb----
+raw_LRR <- LRR_shannon_weighted
+x_lim <- range(c(df$CI_lower, df$CI_upper), na.rm = TRUE)
 
-##combine----
-x_lim <- range(df$CI_lower, df$CI_upper, na.rm = TRUE)
 base_plot <- function(data) {
-  ggplot(data, aes(
-    x = Estimate,
-    y = lable,
-    xmin = CI_lower,
-    xmax = CI_upper,
-    color = group
-  )) +
-    geom_point(aes(size = n), shape = 16) +
-    scale_size(range = c(3, 6)) +
-    geom_errorbarh(height = 0, linewidth = 0.8) +
+  
+  plot_group <- unique(data$group)
+  
+  # get each LRR
+  if (plot_group == "All") {
+    
+    raw_data <- LRR_shannon_weighted %>%
+      mutate(plot_label = "All data")
+    
+  } else if (plot_group == "Biological group") {
+    
+    raw_data <- LRR_shannon_weighted %>%
+      mutate(plot_label = taxa_grouped)
+    
+  } else if (plot_group == "Wetland type") {
+    
+    raw_data <- LRR_shannon_weighted %>%
+      mutate(plot_label = wetland_type_grouped)
+    
+  } else if (plot_group == "Scale") {
+    
+    raw_data <- LRR_shannon_weighted %>%
+      mutate(plot_label = scale_grouped)
+    
+  } else if (plot_group == "Income") {
+    
+    raw_data <- LRR_shannon_weighted %>%
+      mutate(plot_label = income_region)
+    
+  } else if (plot_group == "Reference") {
+    
+    raw_data <- LRR_shannon_weighted %>%
+      mutate(plot_label = reference_type)
+    
+  }
+  
+  raw_data$plot_label <- factor(
+    raw_data$plot_label,
+    levels = levels(data$lable)
+  )
+  
+  ggplot(
+    data,
+    aes(
+      x = Estimate,
+      y = lable,
+      xmin = CI_lower,
+      xmax = CI_upper
+    )
+  ) +
+    
+    # raw LRR
+    geom_jitter(
+      data = raw_data,
+      aes(
+        x = yi,
+        y = plot_label
+      ),
+      height = 0.10,
+      width = 0,
+      size = 2,
+      alpha = 0.25,
+      color = "grey40",
+      fill = "grey85",
+      shape = 21,
+      inherit.aes = FALSE
+    )+
+    
+    #  95% CI
+    geom_errorbarh(
+      aes(
+        color = ifelse(
+          CI_lower <= 0 & CI_upper >= 0,
+          "cross_zero",
+          "not_cross_zero"
+        )
+      ),
+      height = 0,
+      linewidth = 0.8
+    ) +
+    # pooled estimate
+    geom_point(
+      aes(
+        size = n,
+        color = ifelse(
+          CI_lower <= 0 & CI_upper >= 0,
+          "cross_zero",
+          "not_cross_zero"
+        )
+      ),
+      shape = 16
+    ) +
+    scale_size_continuous(
+      range = c(2.5, 6),
+      guide = "none"
+    )+
+    # k, n
     geom_text(
-      aes(x = 0.2, label = paste0("(", n,")")), 
-      hjust = -0.2,
+      aes(
+        x = 0.1,
+        label = paste0(" (", k, ",", n, ")")
+      ),
+      hjust = -0.1,
       vjust = 0.5,
       size = 4,
       color = "black",
       show.legend = FALSE
     ) +
+    # zero line
     geom_vline(
       xintercept = 0,
       linetype = "dashed",
       color = "grey40",
       linewidth = 1
     ) +
-    geom_errorbarh(
-      aes(
-        xmin = CI_lower,
-        xmax = CI_upper,
-        color = ifelse(CI_lower <= 0 & CI_upper >= 0, "cross_zero", "not_cross_zero")
-      ),
-      height = 0,
-      linewidth = 0.8
-    ) +
-    #point
-    geom_point(
-      aes(
-        size = n,
-        color = ifelse(CI_lower <= 0 & CI_upper >= 0, "cross_zero", "not_cross_zero")
-      ),
-      shape = 16
-    ) +
-    facet_wrap(~ group, scales = "free_y", ncol = 1,strip.position = "right") +
     scale_x_continuous(limits = x_lim) +
-    labs(x = "LRR Shannon", y = "") +
+    labs(x = "LRR Shannon",y = "") +
     scale_color_manual(
       values = c(
-        "cross_zero" = "grey70",
+        "cross_zero" = "grey40",
         "not_cross_zero" = "#008b8b"
       ),
       guide = "none"
     ) +
+    facet_wrap(~ group, scales = "free_y", ncol = 1,strip.position = "right") +
     theme_minimal(base_size = 15) +
     theme(
       legend.position = "none",
@@ -338,6 +415,8 @@ base_plot <- function(data) {
       )
     )
 }
+
+
 p1 <- base_plot(subset(df, group == "Biological group"))+
   theme(
     axis.title.x = element_blank(),
@@ -380,10 +459,10 @@ p5 <- base_plot(subset(df, group == "Reference"))+
   theme(plot.margin = margin(1.5, 1.5, 1.5, 1.5))
 
 shannon_plot <- (p4/ p1 / p2 / p3/p6/p5) +
-  plot_layout(heights = c(1, 9, 6, 5,4,4))
+  plot_layout(heights = c(1, 10, 6, 5,4,4))
 
 richness_shannon_comb <- (richness_plot|shannon_plot)+
-  plot_layout(widths = c(1, 0.68))+ 
+  plot_layout(widths = c(1, 0.7))+ 
   plot_annotation(tag_levels = list(c("a"," "," ", " ", "","","b"))) & 
   theme(plot.tag = element_text(size = 14, face = "bold"))
 
@@ -391,8 +470,11 @@ richness_shannon_comb
 
 ##richness_shannon_climate_zone----
 
-cb <- read.csv("model_mean_95ci/supple_use_comb/richness_shannon_climate_mean_95ci.csv")
+cb <- read.csv("model_mean_95ci/supple_use_comb/richness_shannon_mixed_model_mean_95ci.csv")
+# each LRR
+raw_LRR_koppen <- read.csv("LRR/LRR_taxa_shannon_weight_koppen.csv")
 
+# color
 cb <- cb %>%
   mutate(
     color_group = case_when(
@@ -405,26 +487,27 @@ cb <- cb %>%
     )
   )
 
-#point
+# shape
 shape_mapping <- c(
   "Taxonomic richness" = 16,
   "Shannon" = 15
 )
 
-
+# color
 color_mapping <- c(
-  "cross_zero" = "grey70",           
-  "taxonomic_not_cross" = "#1B5F9E",
-  "shannon_not_cross" = "#008b8b"
+  "cross_zero" = "grey40",           
+  "taxonomic_not_cross" = "#1B5F9E", 
+  "shannon_not_cross" = "#008b8b"  
 )
 
-
+y_lim <- range(cb$CI_lower,cb$CI_upper,na.rm = TRUE)
+# shape
 base_plot <- ggplot(cb, aes(
   x = lable,
   y = Estimate,
   shape = index
 )) +
-  
+  # errorbar
   geom_errorbar(
     aes(
       ymin = CI_lower,
@@ -435,27 +518,59 @@ base_plot <- ggplot(cb, aes(
     linewidth = 1,
     position = position_dodge(width = 0.5)
   ) +
-  
   geom_point(
-    aes(color = color_group),
+    data = raw_LRR_koppen,
+    aes(
+      x = koppen_climate,
+      y = yi,
+      group = index
+    ),
+    shape = 21,
+    size = 2,
+    alpha = 0.25,
+    color = "grey40",
+    fill = "grey85",
+    position = position_jitterdodge(
+      jitter.width = 0.12,
+      jitter.height = 0,
+      dodge.width = 0.5
+    ),
+    inherit.aes = FALSE
+  ) +
+  geom_point(
+    aes(
+      color = color_group
+    ),
     size = 5,
     position = position_dodge(width = 0.5)
   ) +
-  
+  # 0 line
   geom_hline(
     yintercept = 0,
     linetype = "dashed",
     color = "grey40",
     linewidth = 0.8
   ) +
- 
+  # n lable
   geom_text(
     aes(
       y = CI_lower,
       label = paste0("(", n, ")")
     ),
     position = position_dodge(width = 1),
-    vjust = 1, 
+    vjust = 1,
+    hjust = 0.5,
+    size = 4.5,
+    color = "black"
+  ) +
+  #k lable
+  geom_text(
+    aes(
+      y = CI_upper,
+      label = paste0("(", k, ")")
+    ),
+    position = position_dodge(width = 1),
+    vjust = -0.3,
     hjust = 0.5,
     size = 4.5,
     color = "black"
@@ -466,7 +581,7 @@ base_plot <- ggplot(cb, aes(
     scales = "free_x",
     space = "free_x"
   ) +
-  
+  # shape
   scale_shape_manual(
     name = "Index",
     values = shape_mapping,
@@ -474,17 +589,17 @@ base_plot <- ggplot(cb, aes(
       override.aes = list(color = "black", size = 5)
     )
   ) +
- 
+  # color
   scale_color_manual(
     values = color_mapping,
     guide = "none"
   ) +
-  
+  scale_y_continuous(limits = y_lim) +
   labs(
     x = "",
     y = "Estimate with 95% CI"
   ) +
-  
+  # theme
   theme_minimal(base_size = 17) +
   theme(
     legend.position = "bottom",
@@ -514,7 +629,7 @@ base_plot <- ggplot(cb, aes(
     strip.text = element_text(
       size = 14,    
       color = "black"
-    ) 
+    )
   )
 
 print(base_plot)
