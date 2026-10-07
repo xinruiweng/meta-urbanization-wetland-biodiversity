@@ -209,15 +209,16 @@ write.csv(
 
 
 ##forest plot data----
-df <- read.csv("data/richness_mean_95ci.csv")
+df <- read.csv("data/taxa_mixed_model_mean_95ci.csv")
 
 df <- df %>%
-  mutate(label_n = paste0(lable, " (", n, ")"))
+  mutate(label_n = paste0(lable, " (",k,"," ,n, ")"))
 
-
+# squences
 bio_order <- c(
   "Bacteria",
   "Algae",
+  "Fungus",
   "Plant",
   "Zooplankton",
   "Macroinvertebrate",
@@ -228,18 +229,18 @@ bio_order <- c(
 )
 
 wetland_order <- c(
-  "River",
+  "Inland flowing water",
   "Reservoir/pond",
   "Lake",
   "Inland vegetated wetland",
   "Coastal wetland",
   "Others"
 )
-scale_order <- c("less than 10 km",
+scale_order <- c("Less than 10 km",
                  "(10, 50] km",
                  "(50, 100] km",
                  "(100, 200] km",
-                 "more than 200 km"
+                 "More than 200 km"
 )
 income_order <- c("High-income",
                  "Upper-middle-income",
@@ -263,62 +264,146 @@ df <- df |>
     )
   )
 
-##combine----
-x_lim <- range(df$CI_lower, df$CI_upper, na.rm = TRUE)
+##comb----
+raw_LRR <- LRR_taxa_weighted
+x_lim <- range(c(df$CI_lower, df$CI_upper), na.rm = TRUE)
+
 base_plot <- function(data) {
-  ggplot(data, aes(
-    x = Estimate,
-    y = lable,
-    xmin = CI_lower,
-    xmax = CI_upper,
-    color = group
-  )) +
-    geom_point(aes(size = n), shape = 16) +
-    scale_size(range = c(3, 6)) +
-    geom_errorbarh(height = 0, linewidth = 0.8) +
-    geom_text(
-      aes(x = 0.02, label = paste0("(", n,")")), 
-      hjust = -0.1,
-      vjust = 0.5,
-      size = 4,
-      color = "black",
-      show.legend = FALSE
-    ) +
-    geom_vline(
-      xintercept = 0,
-      linetype = "dashed",
-      color = "grey40",
-      linewidth = 1
-    ) +
-    # errorbar
-    geom_errorbarh(
+  
+  plot_group <- unique(data$group)
+  
+  # get each LRR
+  if (plot_group == "All") {
+    
+    raw_data <- LRR_taxa_weighted %>%
+      mutate(plot_label = "All data")
+    
+  } else if (plot_group == "Biological group") {
+    
+    raw_data <- LRR_taxa_weighted %>%
+      mutate(plot_label = taxa_grouped)
+    
+  } else if (plot_group == "Wetland type") {
+    
+    raw_data <- LRR_taxa_weighted %>%
+      mutate(plot_label = wetland_type_grouped)
+    
+  } else if (plot_group == "Scale") {
+    
+    raw_data <- LRR_taxa_weighted %>%
+      mutate(plot_label = scale_grouped)
+    
+  } else if (plot_group == "Income") {
+    
+    raw_data <- LRR_taxa_weighted %>%
+      mutate(plot_label = income_region)
+    
+  } else if (plot_group == "Reference") {
+    
+    raw_data <- LRR_taxa_weighted %>%
+      mutate(plot_label = reference_type)
+    
+  }
+  
+  raw_data$plot_label <- factor(
+    raw_data$plot_label,
+    levels = levels(data$lable)
+  )
+  
+  ggplot(
+    data,
+    aes(
+      x = Estimate,
+      y = lable,
+      xmin = CI_lower,
+      xmax = CI_upper
+    )
+  ) +
+
+  # raw LRR
+    geom_jitter(
+      data = raw_data,
       aes(
-        xmin = CI_lower,
-        xmax = CI_upper,
-        color = ifelse(CI_lower <= 0 & CI_upper >= 0, "cross_zero", "not_cross_zero")
+        x = yi,
+        y = plot_label
       ),
-      height = 0,
-      linewidth = 0.8
-    ) +
-    # point
+      height = 0.10,
+      width = 0,
+      size = 2,
+      alpha = 0.25,
+      color = "grey40",
+      fill = "grey85",
+      shape = 21,
+      inherit.aes = FALSE
+    )+
+    
+  #  95% CI
+  geom_errorbarh(
+    aes(
+      color = ifelse(
+        CI_lower <= 0 & CI_upper >= 0,
+        "cross_zero",
+        "not_cross_zero"
+      )
+    ),
+    height = 0,
+    linewidth = 0.8
+  ) +
+  # pooled estimate
     geom_point(
       aes(
         size = n,
-        color = ifelse(CI_lower <= 0 & CI_upper >= 0, "cross_zero", "not_cross_zero")
+        color = ifelse(
+          CI_lower <= 0 & CI_upper >= 0,
+          "cross_zero",
+          "not_cross_zero"
+        )
       ),
       shape = 16
     ) +
-    scale_x_continuous(limits = x_lim) +
-    labs(x = "LRR taxonomic richness", y = "") +
+    scale_size_continuous(
+      range = c(2.5, 6),
+      guide = "none"
+    )+
+  # k, n
+  geom_text(
+    aes(
+      x = 0.02,
+      label = paste0(" (", k, ",", n, ")")
+    ),
+    hjust = -0.1,
+    vjust = 0.5,
+    size = 4,
+    color = "black",
+    show.legend = FALSE
+  ) +
+  # zero line
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "grey40",
+    linewidth = 1
+  ) +
+    
+    scale_x_continuous(
+      limits = x_lim
+    ) +
+    
+    labs(
+      x = "LRR taxonomic richness",
+      y = ""
+    ) +
     
     scale_color_manual(
       values = c(
-        "cross_zero" = "grey70",
+        "cross_zero" = "grey40",
         "not_cross_zero" = "#1B5F9E"
       ),
       guide = "none"
     ) +
+    
     theme_minimal(base_size = 15) +
+    
     theme(
       legend.position = "none",
       axis.text.y = element_text(size = 15),
@@ -375,6 +460,6 @@ p5 <- base_plot(subset(df, group == "Reference"))+
   theme(plot.margin = margin(1.5, 1.5, 1.5, 1.5))
 
 richness_plot <- (p4/ p1 / p2 / p3/p6/p5) +
-  plot_layout(heights = c(1, 9, 6, 5,4,4))
+  plot_layout(heights = c(1, 10, 6, 5,4,4))
 
 richness_plot
