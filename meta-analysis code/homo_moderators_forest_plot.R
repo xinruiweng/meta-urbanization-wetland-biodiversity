@@ -211,16 +211,17 @@ write.csv(
 )
 
 ##forest plot----
-df <- read.csv("data/homogeneity_mean_95ci.csv")
+df <- read.csv("data/homo_mixed_model_mean_95ci.csv")
 
 df <- df %>%
-  mutate(label_n = paste0(lable, " (", n, ")"))
+  mutate(label_n = paste0(lable, " (",k,"," ,n, ")"))
 
 
-
+# sequences
 bio_order <- c(
   "Bacteria",
   "Algae",
+  "Fungus",
   "Plant",
   "Zooplankton",
   "Macroinvertebrate",
@@ -230,28 +231,24 @@ bio_order <- c(
 )
 
 wetland_order <- c(
-  "River",
+  "Inland flowing water",
   "Reservoir/pond",
   "Lake",
   "Inland vegetated wetland",
-  "Coastal wetland"
+  "Coastal wetland",
+  "Others"
 )
-scale_order <- c("less than 10 km",
+scale_order <- c("Less than 10 km",
                  "(10, 50] km",
                  "(50, 100] km",
                  "(100, 200] km",
-                 "more than 200 km"
+                 "More than 200 km"
 )
 income_order <- c("High-income",
                   "Upper-middle-income",
-                  "Lower-middle-income",
-                  "Low-income"
+                  "Lower-middle-income"
 )
-income_order <- c("High-income",
-                  "Upper-middle-income",
-                  "Lower-middle-income",
-                  "Low-income"
-)
+
 reference_order <- c("Natural vegetation",
                      "Semi-natural vegetation",
                      "Intensively managed",
@@ -269,41 +266,108 @@ df <- df |>
     )
   )
 
-##plot----
-x_lim <- range(df$CI_lower, df$CI_upper, na.rm = TRUE)
+##point_dot_new_forest_plot----
+raw_LRR <- LRR_homo_weighted
+x_lim <- range(c(df$CI_lower, df$CI_upper), na.rm = TRUE)
 
 base_plot <- function(data) {
-  data <- data %>%
-    mutate(
-      color_group = ifelse(
-        CI_lower <= 0 & CI_upper >= 0,
-        "cross_zero",
-        "not_cross_zero"
-      )
-    )
   
-  ggplot(data, aes(
-    x = Estimate,
-    y = lable
-  )) +
-    #color
-    geom_col(
-      aes(fill = color_group),
-      width = 0.6,
-      alpha = 0.8
-    ) +
+  plot_group <- unique(data$group)
+  
+  # get each LRR
+  if (plot_group == "All") {
     
+    raw_data <- LRR_homo_weighted %>%
+      mutate(plot_label = "All data")
+    
+  } else if (plot_group == "Biological group") {
+    
+    raw_data <- LRR_homo_weighted %>%
+      mutate(plot_label = taxa_grouped)
+    
+  } else if (plot_group == "Wetland type") {
+    
+    raw_data <- LRR_homo_weighted %>%
+      mutate(plot_label = wetland_type_grouped)
+    
+  } else if (plot_group == "Scale") {
+    
+    raw_data <- LRR_homo_weighted %>%
+      mutate(plot_label = scale_grouped)
+    
+  } else if (plot_group == "Income") {
+    
+    raw_data <- LRR_homo_weighted %>%
+      mutate(plot_label = income_region)
+    
+  } else if (plot_group == "Reference") {
+    
+    raw_data <- LRR_homo_weighted %>%
+      mutate(plot_label = reference_type)
+    
+  }
+  
+  raw_data$plot_label <- factor(
+    raw_data$plot_label,
+    levels = levels(data$lable)
+  )
+  
+  ggplot(
+    data,
+    aes(
+      x = Estimate,
+      y = lable,
+      xmin = CI_lower,
+      xmax = CI_upper
+    )
+  ) +
+    
+    # raw LRR
+    geom_jitter(
+      data = raw_data,
+      aes(
+        x = yi,
+        y = plot_label
+      ),
+      height = 0.10,
+      width = 0,
+      size = 2,
+      alpha = 0.25,
+      color = "grey40",
+      fill = "grey85",
+      shape = 21,
+      inherit.aes = FALSE
+    )+
+    
+    #  95% CI
     geom_errorbarh(
       aes(
-        xmin = CI_lower, 
-        xmax = CI_upper,
-        color = color_group
+        color = ifelse(
+          CI_lower <= 0 & CI_upper >= 0,
+          "cross_zero",
+          "not_cross_zero"
+        )
       ),
-      height = 0,
-      linewidth = 0.8,
-      alpha = 0.7
+      height = 0.3,
+      linewidth = 0.8
     ) +
-    
+    # pooled estimate
+    geom_point(
+      aes(
+        size = n,
+        color = ifelse(
+          CI_lower <= 0 & CI_upper >= 0,
+          "cross_zero",
+          "not_cross_zero"
+        )
+      ),
+      shape = 16
+    ) +
+    scale_size_continuous(
+      range = c(2.5, 5),
+      guide = "none"
+    )+
+    # zero line
     geom_vline(
       xintercept = 0,
       linetype = "dashed",
@@ -311,33 +375,28 @@ base_plot <- function(data) {
       linewidth = 1
     ) +
     
-    scale_x_continuous(limits = x_lim) +
-    
-    labs(x = "LRR homogeneity", y = "") +
-    
-    scale_fill_manual(
-      values = c(
-        "cross_zero" = "grey50",
-        "not_cross_zero" = "#eead0e"
-      ),
-      guide = "none"
-    ) +
-    scale_color_manual(
-      values = c(
-        "cross_zero" = "grey50",
-        "not_cross_zero" = "#eead0e"
-      ),
-      guide = "none"
+    scale_x_continuous(
+      limits = x_lim
     ) +
     scale_y_discrete(
-      labels = function(x) {
-        lab_map <- data |>
-          dplyr::distinct(lable, label_n) |>
-          tibble::deframe()
-        lab_map[x]
-      }
+      labels = setNames(
+        as.character(data$label_n),
+        as.character(data$lable)
+      )
+    )+
+    labs(
+      x = "LRR homogeneity",
+      y = ""
     ) +
     
+    scale_color_manual(
+      values = c(
+        "cross_zero" = "grey40",
+        "not_cross_zero" = "#eead0e"
+      ),
+      guide = "none"
+    ) +
+    # theme
     theme_minimal(base_size = 14) +
     theme(
       legend.position = "none",
@@ -350,39 +409,49 @@ base_plot <- function(data) {
       plot.background = element_rect(fill = "white", color = NA)
     )
 }
-
-
-p1 <- base_plot(subset(df, group == "Biological group")) +
+p1 <- base_plot(subset(df, group == "Biological group"))+
   theme(
     axis.title.x = element_blank(),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank())
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(1.5, 1.5, 1.5, 1.5)
+  )
 
-p2 <- base_plot(subset(df, group == "Wetland type")) +
+p2 <- base_plot(subset(df, group == "Wetland type"))+
   theme(
     axis.title.x = element_blank(),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank())
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(1.5, 1.5, 1.5, 1.5)
+  )
 
-p3 <- base_plot(subset(df, group == "Scale")) +
-  theme(axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank())
-
-p4 <- base_plot(subset(df, group == "All")) +
+p3 <- base_plot(subset(df, group == "Scale"))+
   theme(
     axis.title.x = element_blank(),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank())
-p6 <- base_plot(subset(df, group == "Income")) +
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(1.5, 1.5, 1.5, 1.5)
+  )
+
+p4 <- base_plot(subset(df, group == "All"))+
   theme(
     axis.title.x = element_blank(),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank())
-p5 <- base_plot(subset(df, group == "Reference")) +
-  theme(axis.line.x = element_line(color = "black", linewidth = 0.7))
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(1.5, 1.5, 1.5, 1.5)
+  )
+p6 <- base_plot(subset(df, group == "Income"))+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(1.5, 1.5, 1.5, 1.5)
+  )
+p5 <- base_plot(subset(df, group == "Reference"))+
+  theme(axis.line.x = element_line(color = "black", linewidth = 0.7),
+        plot.margin = margin(1.5, 1.5, 1.5, 1.5))
 
 homo_plot <- (p4/ p1 / p2 / p3/p6/p5) +
-  plot_layout(heights = c(1, 8, 5, 5,3,4))
+  plot_layout(heights = c(1, 9, 6, 5,3,4))
 
-print(homo_plot)
+homo_plot
