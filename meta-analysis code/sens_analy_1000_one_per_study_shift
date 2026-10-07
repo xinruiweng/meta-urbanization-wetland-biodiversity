@@ -1,0 +1,498 @@
+library(dplyr)
+library(metafor)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(patchwork)
+##LRR shift data import----
+LRR_shift_weighted <- read.csv("LRR/LRR_shift_weighted.csv")
+
+set.seed(123)
+
+n_iter <- 1000
+
+moderators <- c(
+  "taxa_grouped",
+  "wetland_type_grouped",
+  "scale_grouped",
+  "koppen_climate",
+  "income_region",
+  "reference_type"
+)
+
+##1000 times_overall_analysis----
+set.seed(123)
+
+overall_results_shift <- vector("list", n_iter)
+
+for (i in 1:n_iter) {
+  
+  
+  dat_i <- LRR_shift_weighted %>%
+    group_by(Study_ID) %>%
+    slice_sample(n = 1) %>%
+    ungroup()
+  
+  # meta-analysis
+  model_i <- rma.mv(
+    yi,
+    vi,
+    data = dat_i,
+    method = "REML"
+  )
+  
+  
+  overall_results_shift[[i]] <- data.frame(
+    iteration = i,
+    estimate = as.numeric(model_i$b),
+    se = model_i$se,
+    ci_lb = model_i$ci.lb,
+    ci_ub = model_i$ci.ub,
+    p = model_i$pval,
+    
+    # heterogeneity test
+    Q = model_i$QE,
+    df = model_i$k - 1,
+    Q_p = model_i$QEp
+  )
+}
+
+overall_results_shift <- bind_rows(overall_results_shift)
+str(overall_results_shift)
+#1000 overall----
+write.csv(overall_results_shift,"TEXT_one_per_study/shift/overall_1000.csv")
+
+##abstract of overall estimate_1000_times----
+sensitivity_summary_shift <- overall_results_shift %>%
+  summarise(
+    mean_estimate = mean(estimate),
+    median_estimate = median(estimate),
+    sd_estimate = sd(estimate),
+    lower_2.5 = quantile(estimate, 0.025),
+    upper_97.5 = quantile(estimate, 0.975),
+    min_estimate = min(estimate),
+    max_estimate = max(estimate),
+    proportion_negative = mean(estimate < 0),
+    proportion_significant = mean(p < 0.05)
+  )
+sensitivity_summary_shift
+
+##1000_times_moderators----
+moderator_results_shift <- vector("list", n_iter)
+
+for (i in 1:n_iter) {
+
+  
+  
+  dat_i <- LRR_shift_weighted %>%
+    group_by(Study_ID) %>%
+    slice_sample(n = 1) %>%
+    ungroup()
+  
+  
+
+  results_i <- list()
+  
+  for (mod in moderators) {
+    
+    # formula
+    formula_i <- as.formula(
+      paste("~", mod)
+    )
+    
+    # model
+    model_i <- rma.mv(
+      yi,
+      vi,
+      mods = formula_i,
+      data = dat_i,
+      method = "REML"
+    )
+    
+    # levels
+    dat_i[[mod]] <- factor(dat_i[[mod]])
+    
+    newdat <- data.frame(
+      temp = levels(dat_i[[mod]])
+    )
+    
+    names(newdat) <- mod
+    
+    # design matrix
+    X <- model.matrix(
+      formula_i,
+      data = newdat
+    )
+    
+    # predictions
+    pred <- predict(
+      model_i,
+      newmods = X[, -1, drop = FALSE],
+      transf = NULL
+    )
+    
+    
+    results_i[[mod]] <- data.frame(
+      iteration = i,
+      variable = mod,
+      category = newdat[[mod]],
+      estimate = pred$pred,
+      ci_lb = pred$ci.lb,
+      ci_ub = pred$ci.ub
+    )
+  }
+  
+  moderator_results_shift[[i]] <- bind_rows(results_i)
+}
+
+moderator_results_shift <- bind_rows(moderator_results_shift)
+str(moderator_results_shift)
+write.csv(moderator_results_shift,"TEXT_one_per_study/shift/moderators_categories_1000.csv")
+
+##boxplot_csv----
+overall_results_shift <- read.csv("TEXT_one_per_study/shift/overall_1000.csv")
+overall_summary_shift <- overall_results_shift %>%
+  summarise(
+    variable = "overall",
+    category = "All",
+    n      = sum(!is.na(estimate)),
+    mean   = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    Q1     = quantile(estimate, 0.25, na.rm = TRUE),
+    Q3     = quantile(estimate, 0.75, na.rm = TRUE),
+    min    = min(estimate, na.rm = TRUE),
+    max    = max(estimate, na.rm = TRUE)
+  ) %>%
+  mutate(
+    IQR = Q3 - Q1,
+    lower_fence = Q1 - 1.5 * IQR,
+    upper_fence = Q3 + 1.5 * IQR
+  )
+moderator_results_shift <- read.csv("TEXT_one_per_study/shift/moderators_categories_1000.csv")
+moderator_summary_shift <- moderator_results_shift %>%
+  group_by(variable, category) %>%
+  summarise(
+    n      = sum(!is.na(estimate)),
+    mean   = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    Q1     = quantile(estimate, 0.25, na.rm = TRUE),
+    Q3     = quantile(estimate, 0.75, na.rm = TRUE),
+    min    = min(estimate, na.rm = TRUE),
+    max    = max(estimate, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    IQR = Q3 - Q1,
+    lower_fence = Q1 - 1.5 * IQR,
+    upper_fence = Q3 + 1.5 * IQR
+  )
+
+all_summary_shift <- bind_rows(
+  overall_summary_shift,
+  moderator_summary_shift
+)
+
+write.csv(
+  all_summary_shift,
+  "TEXT_one_per_study/shift/sensitivity_boxplot_summary.csv",
+  row.names = FALSE
+)
+#visualize 1000----
+shift_1000 <- read.csv("TEXT_one_per_study/shift/1000_boxplot_and_primary.csv")
+
+
+bio_order <- c(
+  "Bacteria",
+  "Algae",
+  "Fungus",
+  "Plant",
+  "Zooplankton",
+  "Macroinvertebrate",
+  "Fish",
+  "Bird",
+  "Others"
+)
+
+wetland_order <- c(
+  "Inland flowing water",
+  "Reservoir/pond",
+  "Lake",
+  "Inland vegetated wetland",
+  "Coastal wetland",
+  "Others"
+)
+scale_order <- c("Less than 10 km",
+                 "(10, 50] km",
+                 "(50, 100] km",
+                 "(100, 200] km",
+                 "More than 200 km"
+)
+income_order <- c("High-income",
+                  "Upper-middle-income",
+                  "Lower-middle-income"
+)
+reference_order <- c("Natural vegetation",
+                     "Semi-natural vegetation",
+                     "Intensively managed",
+                     "Peri-urban"
+)
+
+#comb----
+x_lim <- range(c(shift_1000$lower_fence, shift_1000$upper_fence, shift_1000$primary_estimate),na.rm = TRUE)
+
+base_plot <- function(data, x_lab = NULL, y_lab = NULL) {
+  
+  ggplot(data, aes(y = category)) +
+    
+    # sensitivity analysis: boxplot
+    geom_boxplot(
+      aes(
+        xmin = lower_fence,
+        xlower = Q1,
+        xmiddle = median,
+        xupper = Q3,
+        xmax = upper_fence
+      ),
+      stat = "identity",
+      width = 0.6,
+      orientation = "y"
+    ) +
+    
+    # primary estimate
+    geom_point(
+      aes(x = primary_estimate),
+      size = 3,
+      shape = 17,
+      color = "#eead0e"
+    ) +
+    
+    # zero reference line
+    geom_vline(
+      xintercept = 0,
+      linetype = "dotted"
+    ) +
+    
+    coord_cartesian(xlim = x_lim) +
+    
+    labs(x = x_lab,y = y_lab)+
+    theme_bw()+ 
+    theme(
+      axis.title.x = element_text(size = 14),
+      axis.title.y = element_text(size = 14),
+      axis.text.y = element_text(size = 14)
+    )
+}
+
+#overall----
+overall_data <- shift_1000 %>%
+  filter(variable == "overall") %>%
+  mutate(
+    category = factor(category, levels = "All")
+  )
+
+p_overall <- base_plot(overall_data)+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+#taxa----
+taxa_data <- shift_1000 %>%
+  filter(variable == "taxa_grouped") %>%
+  mutate(
+    category = factor(
+      category,
+      levels = rev(bio_order)
+    )
+  )
+
+p_taxa <- base_plot(taxa_data)+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+#wetland----
+wetland_data <- shift_1000 %>%
+  filter(variable == "wetland_type_grouped") %>%
+  mutate(
+    category = factor(
+      category,
+      levels = rev(wetland_order)
+    )
+  )
+
+p_wetland <- base_plot(wetland_data)+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+#scale----
+scale_data <- shift_1000 %>%
+  filter(variable == "scale_grouped") %>%
+  mutate(
+    category = factor(
+      category,
+      levels = rev(scale_order)
+    )
+  )
+
+p_scale <- base_plot(scale_data)+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+#income----
+income_data <- shift_1000 %>%
+  filter(variable == "income_region") %>%
+  mutate(
+    category = factor(
+      category,
+      levels = rev(income_order)
+    )
+  )
+
+p_income <- base_plot(income_data)+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+#reference----
+reference_data <- shift_1000 %>%
+  filter(variable == "reference_type") %>%
+  mutate(
+    category = factor(
+      category,
+      levels = rev(reference_order)
+    )
+  )
+
+p_reference <- base_plot(reference_data)+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+#koppen----
+koppen_data <- shift_1000 %>%
+  filter(variable == "koppen_climate") %>%
+  mutate(
+    category = factor(
+      category,
+      levels = rev(sort(unique(category)))
+    )
+  )
+
+p_koppen <- base_plot(koppen_data,x_lab = "LRR shift")
+
+#comb----
+final_plot <- (p_overall /p_taxa /p_wetland /p_scale /p_income /p_reference/p_koppen) +
+  plot_layout(heights = c(1, 9, 6, 5, 3, 4, 15))
+
+final_plot
+
+##type II wald test 1000----
+
+full_formula <- ~ taxa_grouped +
+  income_region +
+  wetland_type_grouped +
+  scale_grouped +
+  koppen_climate +
+  reference_type
+
+set.seed(123)
+
+n_iter <- 1000
+
+wald_results <- vector("list", n_iter)
+
+for (i in 1:n_iter) {
+  
+  dat_i <- LRR_shift_weighted %>%
+    group_by(Study_ID) %>%
+    slice_sample(n = 1) %>%
+    ungroup()
+  
+  
+  
+  model_i <- rma.mv(
+    yi,
+    vi,
+    mods = full_formula,
+    random = ~ 1 | Study_ID/Plot_ID,
+    data = dat_i,
+    method = "REML"
+  )
+  
+  
+  beta <- model_i$beta
+  vb <- model_i$vb
+  
+  # Type II Wald test
+  results_i <- lapply(moderators, function(mod) {
+    
+    
+    term_pos <- grep(
+      paste0("^", mod),
+      rownames(beta)
+    )
+    
+    # Type II Wald statistic
+    wald_stat <- t(beta[term_pos, , drop = FALSE]) %*%
+      solve(vb[term_pos, term_pos, drop = FALSE]) %*%
+      beta[term_pos, , drop = FALSE]
+    
+    
+    wald_stat <- as.numeric(wald_stat)
+    
+    # degrees of freedom
+    df <- length(term_pos)
+    
+    # p-value
+    p_value <- pchisq(
+      wald_stat,
+      df = df,
+      lower.tail = FALSE
+    )
+    
+    data.frame(
+      iteration = i,
+      variable = mod,
+      Chi2 = wald_stat,
+      df = df,
+      p = p_value
+    )
+  })
+  
+  wald_results[[i]] <- bind_rows(results_i)
+}
+
+wald_results <- bind_rows(wald_results)
+write.csv(wald_results,"TEXT_one_per_study/shift/wald_1000.csv")
+#summary 1000wald test----
+wald_summary <- wald_results %>%
+  group_by(variable) %>%
+  summarise(
+    mean_Chi2 = mean(Chi2, na.rm = TRUE),
+    median_Chi2 = median(Chi2, na.rm = TRUE),
+    lower_2.5 = quantile(Chi2, 0.025, na.rm = TRUE),
+    upper_97.5 = quantile(Chi2, 0.975, na.rm = TRUE),
+    
+    mean_p = mean(p, na.rm = TRUE),
+    median_p = median(p, na.rm = TRUE),
+    
+    proportion_significant = mean(p < 0.05, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+wald_summary
+write.csv(wald_summary,"TEXT_one_per_study/shift/wald_summary.csv")
